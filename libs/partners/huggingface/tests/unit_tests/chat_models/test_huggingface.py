@@ -2,6 +2,7 @@ from typing import Any, Literal
 from unittest.mock import Mock, patch
 
 import pytest
+from langchain_core.runnables import Runnable
 from pydantic import BaseModel
 
 from langchain_huggingface import (
@@ -48,6 +49,34 @@ def test_pipeline_rejects_json_mode_without_schema(
 ) -> None:
     with pytest.raises(ValueError, match=r"HuggingFacePipeline.*response_format"):
         pipeline_chat.with_structured_output(method="json_mode")
+
+
+@pytest.mark.parametrize("method", [None, "function_calling"])
+def test_pipeline_preserves_function_calling_binding(
+    pipeline_chat: ChatHuggingFace,
+    method: Literal["function_calling"] | None,
+) -> None:
+    """Preserve wrapper construction without asserting local tool-call support."""
+    schema = Answer.model_json_schema()
+    if method is None:
+        runnable = pipeline_chat.with_structured_output(schema)
+    else:
+        runnable = pipeline_chat.with_structured_output(schema, method=method)
+
+    assert isinstance(runnable, Runnable)
+    pipeline_chat.llm.pipeline.assert_not_called()
+
+
+def test_pipeline_preserves_normal_chat(pipeline_chat: ChatHuggingFace) -> None:
+    pipeline_chat.tokenizer.apply_chat_template.return_value = "formatted prompt"
+    pipeline = pipeline_chat.llm.pipeline
+    pipeline.task = "text-generation"
+    pipeline.return_value = [{"generated_text": "ok"}]
+
+    result = pipeline_chat.invoke("Say ok")
+
+    assert result.content == "ok"
+    pipeline.assert_called_once_with(["formatted prompt"])
 
 
 @pytest.mark.parametrize("method", ["json_schema", "json_mode"])
